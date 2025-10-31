@@ -2,11 +2,11 @@
 const canvas = document.getElementById('gameCanvas');
 const ctx = canvas.getContext('2d');
 const TILE = 20;
-const ROWS = 19, COLS = 19; // ¡AHORA ES 19x19! (tu mapa es 19x19, no 21x19)
+const ROWS = 19, COLS = 19;
 let score = 0, dotsLeft = 0, gameOver = false, won = false;
 let timer = 240;
 
-// ===== MAPA CORREGIDO (19x19) =====
+// ===== MAPA (19x19) =====
 const MAP = [
   [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1],
   [1,2,2,2,2,2,2,2,2,1,2,2,2,2,2,2,2,2,1],
@@ -30,15 +30,21 @@ const MAP = [
 ];
 
 // Contar bolitas
-dotsLeft = MAP.flat().filter(c => c === 2 || c === 3).length;
+dotsLeft = 0;
+for (let y = 0; y < ROWS; y++) {
+  for (let x = 0; x < COLS; x++) {
+    if (MAP[y][x] === 2 || MAP[y][x] === 3) dotsLeft++;
+  }
+}
+document.getElementById('dots').textContent = dotsLeft;
 
-// ===== JUGADOR (en píxeles) =====
+// ===== JUGADOR (píxeles) =====
 const player = {
-  x: 9 * TILE + 10,  // centro de la celda (9, 11)
-  y: 11 * TILE + 10,
+  x: 9 * TILE + TILE/2,
+  y: 15 * TILE + TILE/2,
   dir: null,
   nextDir: null,
-  speed: 2.8, // píxeles por frame
+  speed: 2.8,
   radius: 8,
   mouth: 0.2,
   mouthDir: 1
@@ -48,8 +54,8 @@ const player = {
 class Ghost {
   constructor(cx, cy, color, role) {
     this.cx = cx; this.cy = cy;
-    this.x = cx * TILE + 10;
-    this.y = cy * TILE + 10;
+    this.x = cx * TILE + TILE/2;
+    this.y = cy * TILE + TILE/2;
     this.color = color;
     this.role = role;
     this.speed = 2.2;
@@ -60,8 +66,8 @@ class Ghost {
 
   reset() {
     this.cx = this.home.cx; this.cy = this.home.cy;
-    this.x = this.cx * TILE + 10;
-    this.y = this.cy * TILE + 10;
+    this.x = this.cx * TILE + TILE/2;
+    this.y = this.cy * TILE + TILE/2;
     this.fleeing = false;
   }
 
@@ -79,8 +85,8 @@ class Ghost {
     for (let i = 0; i < steps; i++) {
       px += dx * player.speed;
       py += dy * player.speed;
-      const cx = (px / TILE) | 0;
-      const cy = (py / TILE) | 0;
+      const cx = Math.floor(px / TILE);
+      const cy = Math.floor(py / TILE);
       if (!this.isValid(cx, cy)) break;
     }
     return { x: px, y: py };
@@ -92,7 +98,7 @@ class Ghost {
     const cameFrom = {};
     const gScore = {};
     const start = `${this.cx},${this.cy}`;
-    const goal = `${tx|0},${ty|0}`;
+    const goal = `${Math.floor(tx/TILE)},${Math.floor(ty/TILE)}`;
     gScore[start] = 0;
     open.push({ pos: start, f: this.heuristic(start, goal) });
 
@@ -131,7 +137,7 @@ class Ghost {
     }
     return path.map(p => {
       const [x, y] = p.split(',').map(Number);
-      return { x: x * TILE + 10, y: y * TILE + 10 };
+      return { x: x * TILE + TILE/2, y: y * TILE + TILE/2 };
     });
   }
 
@@ -146,7 +152,7 @@ class Ghost {
           break;
         case 'blocker':
           const power = this.getNearestPower();
-          this.target = power ? { x: power.x * TILE + 10, y: power.y * TILE + 10 } : this.predictPlayer(2);
+          this.target = power ? { x: power.x * TILE + TILE/2, y: power.y * TILE + TILE/2 } : this.predictPlayer(2);
           break;
         case 'ambusher':
           this.target = this.findBestAmbush();
@@ -157,7 +163,7 @@ class Ghost {
       }
     }
 
-    const path = this.findPath(this.target.x / TILE, this.target.y / TILE);
+    const path = this.findPath(this.target.x, this.target.y);
     if (path.length > 1) {
       const next = path[1];
       const dx = next.x - this.x;
@@ -168,10 +174,8 @@ class Ghost {
         this.y += (dy / dist) * this.speed;
       }
     }
-
-    // Actualizar celda
-    this.cx = (this.x / TILE) | 0;
-    this.cy = (this.y / TILE) | 0;
+    this.cx = Math.floor(this.x / TILE);
+    this.cy = Math.floor(this.y / TILE);
   }
 
   getNearestPower() {
@@ -196,11 +200,11 @@ class Ghost {
           for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
             if (MAP[y+dy]?.[x+dx] === 2) local++;
           }
-          if (local > count) { count = local; best = { x: x * TILE + 10, y: y * TILE + 10 }; }
+          if (local > count) { count = local; best = { x: x * TILE + TILE/2, y: y * TILE + TILE/2 }; }
         }
       }
     }
-    return best || { x: 9 * TILE + 10, y: 9 * TILE + 10 };
+    return best || { x: 9 * TILE + TILE/2, y: 9 * TILE + TILE/2 };
   }
 
   findBestAmbush() {
@@ -212,15 +216,14 @@ class Ghost {
           for (let [dx, dy] of [[0,1],[1,0],[0,-1],[-1,0]]) {
             if (this.isValid(x+dx, y+dy)) count++;
           }
-          if (count >= 3 && count > exits) { exits = count; best = { x: x * TILE + 10, y: y * TILE + 10 }; }
+          if (count >= 3 && count > exits) { exits = count; best = { x: x * TILE + TILE/2, y: y * TILE + TILE/2 }; }
         }
       }
     }
-    return best || { x: 9 * TILE + 10, y: 9 * TILE + 10 };
+    return best || { x: 9 * TILE + TILE/2, y: 9 * TILE + TILE/2 };
   }
 }
 
-// Fantasmas
 const ghosts = [
   new Ghost(9, 9, '#f00', 'chaser'),
   new Ghost(8, 9, '#ffb8ff', 'blocker'),
@@ -237,11 +240,15 @@ window.addEventListener('keydown', e => {
     keys[map[e.key]] = true;
   }
 });
+window.addEventListener('keyup', e => {
+  const map = { ArrowUp: 'up', ArrowDown: 'down', ArrowLeft: 'left', ArrowRight: 'right' };
+  if (map[e.key]) keys[map[e.key]] = false;
+});
 
-// ===== COLISIÓN Y COMER =====
+// ===== COMER =====
 function eatDot(px, py) {
-  const cx = (px / TILE) | 0;
-  const cy = (py / TILE) | 0;
+  const cx = Math.floor(px / TILE);
+  const cy = Math.floor(py / TILE);
   if (MAP[cy] && MAP[cy][cx] === 2) {
     MAP[cy][cx] = 0;
     score += 10;
@@ -267,23 +274,24 @@ function update() {
 
   timer -= 1/60;
   document.getElementById('timer').textContent = Math.max(0, Math.ceil(timer));
-  if (timer <= 0) { gameOver = true; return; }
+  if (timer <= 0) { gameOver = true; }
 
   // Input
   const dirs = { up: [0,-1], down: [0,1], left: [-1,0], right: [1,0] };
   let intended = null;
   for (let d of ['up','down','left','right']) if (keys[d]) { intended = d; break; }
 
-  if (intended) {
+  if (intended && intended !== player.dir) {
     const [dx, dy] = dirs[intended];
     const nx = player.x + dx * player.speed;
     const ny = player.y + dy * player.speed;
-    const cx = (nx / TILE) | 0;
-    const cy = (ny / TILE) | 0;
+    const cx = Math.floor(nx / TILE);
+    const cy = Math.floor(ny / TILE);
     if (MAP[cy] && MAP[cy][cx] !== 1) {
       player.dir = intended;
+    } else {
+      player.nextDir = intended;
     }
-    player.nextDir = intended;
   }
 
   // Movimiento
@@ -291,19 +299,12 @@ function update() {
     const [dx, dy] = dirs[player.dir];
     const nx = player.x + dx * player.speed;
     const ny = player.y + dy * player.speed;
-    const cx = (nx / TILE) | 0;
-    const cy = (ny / TILE) | 0;
+    const cx = Math.floor(nx / TILE);
+    const cy = Math.floor(ny / TILE);
     if (MAP[cy] && MAP[cy][cx] !== 1) {
       player.x = nx; player.y = ny;
-    } else if (player.nextDir && player.nextDir !== player.dir) {
-      const [dx2, dy2] = dirs[player.nextDir];
-      const nx2 = player.x + dx2 * player.speed;
-      const ny2 = player.y + dy2 * player.speed;
-      const cx2 = (nx2 / TILE) | 0;
-      const cy2 = (ny2 / TILE) | 0;
-      if (MAP[cy2] && MAP[cy2][cx2] !== 1) {
-        player.dir = player.nextDir;
-      }
+    } else {
+      player.dir = null;
     }
   }
 
@@ -379,7 +380,6 @@ function render() {
     ctx.beginPath();
     ctx.arc(g.x, g.y, 8, 0, Math.PI*2);
     ctx.fill();
-    // Ojos
     ctx.fillStyle = '#fff';
     ctx.beginPath(); ctx.arc(g.x - 4, g.y - 2, 2.5, 0, Math.PI*2); ctx.fill();
     ctx.beginPath(); ctx.arc(g.x + 4, g.y - 2, 2.5, 0, Math.PI*2); ctx.fill();
