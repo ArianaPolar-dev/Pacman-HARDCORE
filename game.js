@@ -2,12 +2,11 @@
 const canvas = document.getElementById('gameCanvas');
 const ctx = canvas.getContext('2d');
 const TILE = 20;
-const ROWS = 21, COLS = 19;
-let score = 0, dotsLeft = 244, gameOver = false, won = false;
-let timer = 240; // 4 minutos
-let timerInterval;
+const ROWS = 19, COLS = 19; // ¡AHORA ES 19x19! (tu mapa es 19x19, no 21x19)
+let score = 0, dotsLeft = 0, gameOver = false, won = false;
+let timer = 240;
 
-// ===== MAPA (1=pared, 2=punto, 3=power, 0=vacío) =====
+// ===== MAPA CORREGIDO (19x19) =====
 const MAP = [
   [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1],
   [1,2,2,2,2,2,2,2,2,1,2,2,2,2,2,2,2,2,1],
@@ -30,41 +29,70 @@ const MAP = [
   [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1]
 ];
 
-// ===== JUGADOR =====
+// Contar bolitas
+dotsLeft = MAP.flat().filter(c => c === 2 || c === 3).length;
+
+// ===== JUGADOR (en píxeles) =====
 const player = {
-  x: 9, y: 15, // centro abajo
+  x: 9 * TILE + 10,  // centro de la celda (9, 11)
+  y: 11 * TILE + 10,
   dir: null,
   nextDir: null,
-  speed: 0.14,
-  radius: 0.4,
+  speed: 2.8, // píxeles por frame
+  radius: 8,
   mouth: 0.2,
   mouthDir: 1
 };
 
-// ===== FANTASMAS (IA DEMONÍACA) =====
+// ===== FANTASMAS =====
 class Ghost {
-  constructor(x, y, color, role) {
-    this.x = x; this.y = y;
+  constructor(cx, cy, color, role) {
+    this.cx = cx; this.cy = cy;
+    this.x = cx * TILE + 10;
+    this.y = cy * TILE + 10;
     this.color = color;
     this.role = role;
-    this.speed = 0.11;
-    this.target = { x, y };
-    this.path = [];
-    this.scatter = false;
+    this.speed = 2.2;
+    this.target = { x: this.x, y: this.y };
     this.fleeing = false;
-    this.home = { x, y };
+    this.home = { cx, cy };
   }
 
-  reset() { this.x = this.home.x; this.y = this.home.y; this.fleeing = false; }
+  reset() {
+    this.cx = this.home.cx; this.cy = this.home.cy;
+    this.x = this.cx * TILE + 10;
+    this.y = this.cy * TILE + 10;
+    this.fleeing = false;
+  }
 
-  // A* Pathfinding
-  findPath(targetX, targetY) {
+  isValid(cx, cy) {
+    if (cx < 0 || cx >= COLS || cy < 0 || cy >= ROWS) return false;
+    return MAP[cy][cx] !== 1;
+  }
+
+  predictPlayer(steps = 5) {
+    let px = player.x, py = player.y;
+    let dir = player.dir || player.nextDir;
+    if (!dir) return { x: px, y: py };
+    const dirs = { up: [0,-1], down: [0,1], left: [-1,0], right: [1,0] };
+    const [dx, dy] = dirs[dir];
+    for (let i = 0; i < steps; i++) {
+      px += dx * player.speed;
+      py += dy * player.speed;
+      const cx = (px / TILE) | 0;
+      const cy = (py / TILE) | 0;
+      if (!this.isValid(cx, cy)) break;
+    }
+    return { x: px, y: py };
+  }
+
+  findPath(tx, ty) {
     const open = [];
     const closed = new Set();
     const cameFrom = {};
     const gScore = {};
-    const start = `${this.x|0},${this.y|0}`;
-    const goal = `${targetX|0},${targetY|0}`;
+    const start = `${this.cx},${this.cy}`;
+    const goal = `${tx|0},${ty|0}`;
     gScore[start] = 0;
     open.push({ pos: start, f: this.heuristic(start, goal) });
 
@@ -73,7 +101,6 @@ class Ghost {
       const current = open.shift().pos;
       if (current === goal) return this.reconstruct(cameFrom, current);
       closed.add(current);
-
       const [cx, cy] = current.split(',').map(Number);
       for (let [dx, dy] of [[0,1],[1,0],[0,-1],[-1,0]]) {
         const nx = cx + dx, ny = cy + dy;
@@ -102,28 +129,49 @@ class Ghost {
       current = cameFrom[current];
       path.unshift(current);
     }
-    return path.map(p => ({ x: +p.split(',')[0], y: +p.split(',')[1] }));
+    return path.map(p => {
+      const [x, y] = p.split(',').map(Number);
+      return { x: x * TILE + 10, y: y * TILE + 10 };
+    });
   }
 
-  isValid(x, y) {
-    x = x|0; y = y|0;
-    if (x < 0 || x >= COLS || y < 0 || y >= ROWS) return false;
-    return MAP[y][x] !== 1;
-  }
-
-  predictPlayer(steps = 5) {
-    let px = player.x, py = player.y;
-    let dir = player.dir || player.nextDir;
-    if (!dir) return { x: px, y: py };
-    const dirs = { 'up': [0,-1], 'down': [0,1], 'left': [-1,0], 'right': [1,0] };
-    const [dx, dy] = dirs[dir] || [0,0];
-    for (let i = 0; i < steps; i++) {
-      const nx = px + dx * player.speed * 3;
-      const ny = py + dy * player.speed * 3;
-      if (this.isValid(nx, ny)) { px = nx; py = ny; }
-      else break;
+  update() {
+    if (this.fleeing) {
+      this.target = { x: Math.random() * canvas.width, y: Math.random() * canvas.height };
+    } else {
+      switch (this.role) {
+        case 'chaser':
+          const future = this.predictPlayer(5);
+          this.target = future;
+          break;
+        case 'blocker':
+          const power = this.getNearestPower();
+          this.target = power ? { x: power.x * TILE + 10, y: power.y * TILE + 10 } : this.predictPlayer(2);
+          break;
+        case 'ambusher':
+          this.target = this.findBestAmbush();
+          break;
+        case 'patroller':
+          this.target = this.findRichestZone();
+          break;
+      }
     }
-    return { x: px, y: py };
+
+    const path = this.findPath(this.target.x / TILE, this.target.y / TILE);
+    if (path.length > 1) {
+      const next = path[1];
+      const dx = next.x - this.x;
+      const dy = next.y - this.y;
+      const dist = Math.hypot(dx, dy);
+      if (dist > 1) {
+        this.x += (dx / dist) * this.speed;
+        this.y += (dy / dist) * this.speed;
+      }
+    }
+
+    // Actualizar celda
+    this.cx = (this.x / TILE) | 0;
+    this.cy = (this.y / TILE) | 0;
   }
 
   getNearestPower() {
@@ -131,17 +179,12 @@ class Ghost {
     for (let y = 0; y < ROWS; y++) {
       for (let x = 0; x < COLS; x++) {
         if (MAP[y][x] === 3) {
-          const d = Math.hypot(x - this.x, y - this.y);
+          const d = Math.hypot(x - this.cx, y - this.cy);
           if (d < dist) { dist = d; best = { x, y }; }
         }
       }
     }
     return best;
-  }
-
-  getChokepointTo(target) {
-    const path = this.findPath(target.x, target.y);
-    return path.length > 3 ? path[2] : target;
   }
 
   findRichestZone() {
@@ -150,16 +193,14 @@ class Ghost {
       for (let x = 1; x < COLS-1; x++) {
         if (MAP[y][x] === 2) {
           let local = 0;
-          for (let dy = -1; dy <= 1; dy++) {
-            for (let dx = -1; dx <= 1; dx++) {
-              if (MAP[y+dy]?.[x+dx] === 2) local++;
-            }
+          for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+            if (MAP[y+dy]?.[x+dx] === 2) local++;
           }
-          if (local > count) { count = local; best = { x, y }; }
+          if (local > count) { count = local; best = { x: x * TILE + 10, y: y * TILE + 10 }; }
         }
       }
     }
-    return best || { x: 9, y: 9 };
+    return best || { x: 9 * TILE + 10, y: 9 * TILE + 10 };
   }
 
   findBestAmbush() {
@@ -171,72 +212,38 @@ class Ghost {
           for (let [dx, dy] of [[0,1],[1,0],[0,-1],[-1,0]]) {
             if (this.isValid(x+dx, y+dy)) count++;
           }
-          if (count >= 3 && count > exits) { exits = count; best = { x, y }; }
+          if (count >= 3 && count > exits) { exits = count; best = { x: x * TILE + 10, y: y * TILE + 10 }; }
         }
       }
     }
-    return best || { x: 9, y: 9 };
-  }
-
-  update(ghosts) {
-    if (this.fleeing) {
-      this.target = { x: Math.random() * COLS, y: Math.random() * ROWS };
-    } else {
-      switch (this.role) {
-        case 'chaser':
-          const future = this.predictPlayer(5);
-          this.target = future;
-          break;
-        case 'blocker':
-          const power = this.getNearestPower();
-          this.target = power ? this.getChokepointTo(power) : this.predictPlayer(2);
-          break;
-        case 'ambusher':
-          this.target = this.findBestAmbush();
-          break;
-        case 'patroller':
-          this.target = this.findRichestZone();
-          break;
-      }
-    }
-
-    this.path = this.findPath(this.target.x, this.target.y);
-    if (this.path.length > 1) {
-      const next = this.path[1];
-      const dx = next.x - this.x;
-      const dy = next.y - this.y;
-      const dist = Math.hypot(dx, dy);
-      if (dist > 0.1) {
-        this.x += (dx / dist) * this.speed;
-        this.y += (dy / dist) * this.speed;
-      }
-    }
+    return best || { x: 9 * TILE + 10, y: 9 * TILE + 10 };
   }
 }
 
 // Fantasmas
 const ghosts = [
-  new Ghost(9, 9, '#f00', 'chaser'),    // Blaze
-  new Ghost(8, 9, '#ffb8ff', 'blocker'), // Shade
-  new Ghost(10, 9, '#00ffff', 'ambusher'), // Inky
-  new Ghost(9, 10, '#ffb851', 'patroller') // Clyde
+  new Ghost(9, 9, '#f00', 'chaser'),
+  new Ghost(8, 9, '#ffb8ff', 'blocker'),
+  new Ghost(10, 9, '#00ffff', 'ambusher'),
+  new Ghost(9, 10, '#ffb851', 'patroller')
 ];
-ghosts.forEach(g => g.home = { x: g.x, y: g.y });
 
 // ===== INPUT =====
 const keys = {};
 window.addEventListener('keydown', e => {
-  if (['ArrowUp','ArrowDown','ArrowLeft','ArrowRight'].includes(e.key)) {
+  const map = { ArrowUp: 'up', ArrowDown: 'down', ArrowLeft: 'left', ArrowRight: 'right' };
+  if (map[e.key]) {
     e.preventDefault();
-    keys[e.key.replace('Arrow', '').toLowerCase()] = true;
+    keys[map[e.key]] = true;
   }
 });
 
-// ===== COLISIÓN =====
-function eatDot(x, y) {
-  x = x|0; y = y|0;
-  if (MAP[y][x] === 2) {
-    MAP[y][x] = 0;
+// ===== COLISIÓN Y COMER =====
+function eatDot(px, py) {
+  const cx = (px / TILE) | 0;
+  const cy = (py / TILE) | 0;
+  if (MAP[cy] && MAP[cy][cx] === 2) {
+    MAP[cy][cx] = 0;
     score += 10;
     dotsLeft--;
     document.getElementById('score').textContent = score;
@@ -244,35 +251,36 @@ function eatDot(x, y) {
     if (dotsLeft % 50 === 0 && dotsLeft > 0) {
       ghosts.forEach(g => g.speed *= 1.15);
     }
-  } else if (MAP[y][x] === 3) {
-    MAP[y][x] = 0;
+  } else if (MAP[cy] && MAP[cy][cx] === 3) {
+    MAP[cy][cx] = 0;
     score += 50;
-    ghosts.forEach(g => { g.fleeing = true; setTimeout(() => g.fleeing = false, 8000); });
+    ghosts.forEach(g => {
+      g.fleeing = true;
+      setTimeout(() => g.fleeing = false, 8000);
+    });
   }
 }
 
-// ===== LOOP PRINCIPAL =====
+// ===== LOOP =====
 function update() {
   if (gameOver || won) return;
 
-  // Timer
-  if (timer <= 0) { gameOver = true; return; }
   timer -= 1/60;
-  document.getElementById('timer').textContent = Math.ceil(timer);
+  document.getElementById('timer').textContent = Math.max(0, Math.ceil(timer));
+  if (timer <= 0) { gameOver = true; return; }
 
   // Input
   const dirs = { up: [0,-1], down: [0,1], left: [-1,0], right: [1,0] };
   let intended = null;
-  if (keys.up) intended = 'up';
-  else if (keys.down) intended = 'down';
-  else if (keys.left) intended = 'left';
-  else if (keys.right) intended = 'right';
+  for (let d of ['up','down','left','right']) if (keys[d]) { intended = d; break; }
 
   if (intended) {
     const [dx, dy] = dirs[intended];
     const nx = player.x + dx * player.speed;
     const ny = player.y + dy * player.speed;
-    if (MAP[ny|0][nx|0] !== 1) {
+    const cx = (nx / TILE) | 0;
+    const cy = (ny / TILE) | 0;
+    if (MAP[cy] && MAP[cy][cx] !== 1) {
       player.dir = intended;
     }
     player.nextDir = intended;
@@ -283,25 +291,27 @@ function update() {
     const [dx, dy] = dirs[player.dir];
     const nx = player.x + dx * player.speed;
     const ny = player.y + dy * player.speed;
-    if (MAP[ny|0][nx|0] !== 1) {
+    const cx = (nx / TILE) | 0;
+    const cy = (ny / TILE) | 0;
+    if (MAP[cy] && MAP[cy][cx] !== 1) {
       player.x = nx; player.y = ny;
     } else if (player.nextDir && player.nextDir !== player.dir) {
       const [dx2, dy2] = dirs[player.nextDir];
       const nx2 = player.x + dx2 * player.speed;
       const ny2 = player.y + dy2 * player.speed;
-      if (MAP[ny2|0][nx2|0] !== 1) {
+      const cx2 = (nx2 / TILE) | 0;
+      const cy2 = (ny2 / TILE) | 0;
+      if (MAP[cy2] && MAP[cy2][cx2] !== 1) {
         player.dir = player.nextDir;
       }
     }
   }
 
-  // Comer
   eatDot(player.x, player.y);
 
-  // Fantasmas
-  ghosts.forEach(g => g.update(ghosts));
+  ghosts.forEach(g => g.update());
   ghosts.forEach(g => {
-    if (Math.hypot(g.x - player.x, g.y - player.y) < 0.7) {
+    if (Math.hypot(g.x - player.x, g.y - player.y) < 16) {
       if (g.fleeing) {
         score += 200;
         g.reset();
@@ -311,10 +321,9 @@ function update() {
     }
   });
 
-  // Ganar
   if (dotsLeft === 0) {
     won = true;
-    const name = prompt("¡ERES EL PRIMER HUMANO EN COMPLETAR PAC-MAN HELL!\n\nIngresa tu nombre para la eternidad:");
+    const name = prompt("¡ERES EL PRIMERO EN COMPLETAR PAC-MAN HELL!\nIngresa tu nombre:");
     if (name) saveFirstWinner(name);
     showWinner();
   }
@@ -332,86 +341,74 @@ function render() {
   for (let y = 0; y < ROWS; y++) {
     for (let x = 0; x < COLS; x++) {
       const val = MAP[y][x];
-      const px = x * TILE + 10, py = y * TILE + 10;
+      const px = x * TILE, py = y * TILE;
       if (val === 1) {
         ctx.fillStyle = '#00f';
         ctx.fillRect(px, py, TILE, TILE);
       } else if (val === 2) {
-        ctx.fillStyle = '#fff';
+        ctx.fillStyle = '#ffb';
         ctx.beginPath();
-        ctx.arc(px + 10, py + 10, 2, 0, Math.PI*2);
+        ctx.arc(px + 10, py + 10, 3, 0, Math.PI*2);
         ctx.fill();
       } else if (val === 3) {
         ctx.fillStyle = '#ff0';
         ctx.beginPath();
-        ctx.arc(px + 10, py + 10, 5, 0, Math.PI*2);
+        ctx.arc(px + 10, py + 10, 6, 0, Math.PI*2);
         ctx.fill();
       }
     }
   }
 
-  // Jugador
+  // Pac-Man
   ctx.save();
-  ctx.translate(player.x * TILE + 10, player.y * TILE + 10);
+  ctx.translate(player.x, player.y);
   const angle = { right: 0, down: Math.PI/2, left: Math.PI, up: -Math.PI/2 }[player.dir] || 0;
   ctx.rotate(angle);
   ctx.fillStyle = '#ff0';
   ctx.beginPath();
-  ctx.arc(0, 0, TILE * player.radius, player.mouth, Math.PI*2 - player.mouth);
+  ctx.arc(0, 0, player.radius, player.mouth, Math.PI*2 - player.mouth);
   ctx.lineTo(0, 0);
   ctx.fill();
   ctx.restore();
-  player.mouth += 0.05 * player.mouthDir;
+  player.mouth += 0.08 * player.mouthDir;
   if (player.mouth > 0.7 || player.mouth < 0.2) player.mouthDir *= -1;
 
   // Fantasmas
   ghosts.forEach(g => {
     ctx.fillStyle = g.fleeing ? '#00f' : g.color;
-    const px = g.x * TILE + 10, py = g.y * TILE + 10;
     ctx.beginPath();
-    ctx.arc(px, py, TILE * 0.4, 0, Math.PI*2);
+    ctx.arc(g.x, g.y, 8, 0, Math.PI*2);
     ctx.fill();
     // Ojos
     ctx.fillStyle = '#fff';
-    ctx.beginPath(); ctx.arc(px - 5, py - 3, 3, 0, Math.PI*2); ctx.fill();
-    ctx.beginPath(); ctx.arc(px + 5, py - 3, 3, 0, Math.PI*2); ctx.fill();
+    ctx.beginPath(); ctx.arc(g.x - 4, g.y - 2, 2.5, 0, Math.PI*2); ctx.fill();
+    ctx.beginPath(); ctx.arc(g.x + 4, g.y - 2, 2.5, 0, Math.PI*2); ctx.fill();
   });
 }
 
-// ===== PRIMER GANADOR =====
+// ===== GANADOR =====
 function saveFirstWinner(name) {
-  const key = 'PACMAN_HELL_FIRST';
-  if (!localStorage.getItem(key)) {
-    const data = { name, date: new Date().toLocaleString(), score };
-    localStorage.setItem(key, JSON.stringify(data));
-    return true;
+  if (!localStorage.getItem('PACMAN_HELL_FIRST')) {
+    localStorage.setItem('PACMAN_HELL_FIRST', JSON.stringify({ name, date: new Date().toLocaleString(), score }));
   }
-  return false;
 }
 
 function showWinner() {
-  const data = JSON.parse(localStorage.getItem('PACMAN_HELL_FIRST'));
+  const data = JSON.parse(localStorage.getItem('PACMAN_HELL_FIRST') || 'null');
   if (data) {
-    const el = document.getElementById('winner');
-    el.innerHTML = `
-      <div>PRIMER GANADOR MUNDIAL</div>
-      <div style="font-size:48px;color:gold;margin:10px 0;">${data.name}</div>
-      <div>Completado: ${data.date}</div>
-      <div>Puntaje: ${data.score}</div>
+    document.getElementById('winner').innerHTML = `
+      <div style="color:gold;font-size:28px;">PRIMER GANADOR: ${data.name}</div>
+      <div>${data.date} | Puntos: ${data.score}</div>
     `;
   }
 }
 
 // ===== INICIO =====
-function start() {
-  timerInterval = setInterval(() => {
-    timer--;
-    document.getElementById('timer').textContent = Math.ceil(timer);
-    if (timer <= 0) gameOver = true;
-  }, 1000);
-  update();
-}
-
-// Mostrar ganador previo
 showWinner();
-setTimeout(start, 1000);
+setTimeout(() => {
+  requestAnimationFrame(update);
+  setInterval(() => {
+    timer = Math.max(0, timer - 1);
+    document.getElementById('timer').textContent = Math.ceil(timer);
+  }, 1000);
+}, 500);
